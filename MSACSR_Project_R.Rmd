@@ -1,0 +1,1243 @@
+---
+title: "MSACSR_Project_R"
+author: "Buse Uzun"
+date: "2025-07-22"
+output:
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: inline
+---
+
+# 
+
+\newpage
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+```{r, include=FALSE}
+library(ggplot2)
+library(forecast)
+library(stats)
+library(tidyverse)
+library(anomalize)
+library(TSA)
+library(gridExtra)
+library(tseries)
+library(fUnitRoots)
+library(pdR)
+library(uroot)
+library(tseries)
+library(lmtest)
+library(FinTS)
+library(prophet)
+```
+
+# SAMPLE ABSTRACT
+
+Society is growing and improving rapidly, improvement comes with change. Change of people, and their demands. Demand and price certainly go hand in hand, the same rule applies to the supply of new houses. As demand rises, new houses will be built and sold increasingly.
+
+In this report, the investigation will be the change of monthly supply of new houses in the United States. Supply means ratio of new houses on sale to new houses sold. 
+
+# ANALYSIS
+```{r}
+msacsr_data <- read.csv("MSACSR.csv")
+head(msacsr_data)
+```
+```{r}
+class(msacsr_data)
+```
+As MSACSR is in the dataframe format, we need to make it a time series object by applying the following step:
+```{r}
+msacsr_ts <- ts(msacsr_data[,2], start=c(1963,1), frequency = 12)
+class(msacsr_ts)
+```
+Now, "ts" format is obtained. 
+```{r}
+str(msacsr_ts)
+summary(msacsr_ts)
+```
+
+Minimum supply of new houses in a month is 3.3. First quartile value gives the 25th percentile of the data, monthly supply of new houses for the 25% of the data is 4.9 or less. Similarly, 50% of the data is equal to or below 5.9. 75% of the data is equal to or below 7, and lastly the maximum supply of new houses in a month is 12.2. Averagely, the monthly supply of new houses is 6.133.
+```{r}
+sum(is.na(msacsr_ts))
+```
+There are no NA values in the data. 
+
+```{r}
+autoplot(msacsr_ts, main = "Monthly Supply of New Houses in the United States", ylab = "Months' Supply")
+```
+When the time series plot of MSACSR data is observed, there can be seasonality. Mean is varying lightly, and variance is unstable. Series do not seem to be stable, further analysis is needed to come to a conclusion.
+
+```{r}
+boxplot(msacsr_ts~cycle(msacsr_ts), xlab="month", ylab="MSACSR", main ="Box-Plot of MSACSR")
+```
+
+When box-plot of MSACSR for each month is checked, means look steady but there can be seasonality due to small variation.
+
+STL can be used to split the series into components to make a more detailed observation.
+
+```{r}
+msacsr_ts %>%
+  stl(t.window=13, s.window="periodic", robust=TRUE) %>%
+  autoplot()+ xlab("Year") +
+  ggtitle("STL decomposition of MSACSR")+theme_minimal()
+```
+Giving odd values to window function enables us to see the whole year and more. When third graph is analyzed, there is a repetitive behavior. Hence, there seems to be seasonality. 
+From the remainder plot, some peaks can be observed which indicates outliers. 
+
+Before cleaning the data, it should be split into train and test parts for cross-validation in future analysis.
+
+```{r}
+#Train data
+msacsr_tr <- window(msacsr_ts, end=c(time(msacsr_ts)[length(msacsr_ts) - 12]))
+#Test data
+msacsr_test <- window(msacsr_ts, start = c(time(msacsr_ts)[length(msacsr_ts) - 12 + 1]))
+msacsr_test
+```
+
+Now, analysis can be proceeded with anomaly detection to clean the data and investigate the outliers further. First, data should be converted to tibble.
+
+```{r}
+msacsr_anomaly <- msacsr_data
+msacsr_anomaly$month <- paste(msacsr_anomaly$DATE, "01", sep="-")
+msacsr_anomaly$month <- as.Date(msacsr_anomaly$month,format="%Y-%m-%d")
+msacsr_anomaly <- msacsr_anomaly %>% select(month,MSACSR)
+msacsr_tibble <- as_tibble(msacsr_anomaly)
+class(msacsr_tibble)
+head(msacsr_tibble)
+```
+
+Now, anomaly detection can be applied.
+```{r}
+msacsr_tibble %>%
+  anomalize::time_decompose(MSACSR, method = "stl", frequency ="auto", trend = "auto") %>%
+  anomalize::anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  anomalize::plot_anomaly_decomposition()
+```
+
+Instead of decomposing, following code could also be used.
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder) %>%
+  anomalize::time_recompose() %>%
+  anomalize::plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+
+```
+
+Above plots indicate that there are anomalies/outliers in the data. Anomalies should be extracted from the data.
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder) %>%
+  anomalize::time_recompose() %>%
+  filter(anomaly == 'Yes')
+```
+
+Alpha and max anoms can be changed as following:
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder,alpha=0.05) %>%
+  anomalize::time_recompose() %>%
+  anomalize::plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder,alpha=0.5) %>%
+  anomalize::time_recompose() %>%
+  anomalize::plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder,alpha=0.3,max_anoms = 0.2) %>%
+  anomalize::time_recompose() %>%
+  anomalize::plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+
+There are many outliers due to alpha value being 0.3.
+
+```{r}
+msacsr_tibble %>% 
+  anomalize::time_decompose(MSACSR) %>%
+  anomalize::anomalize(remainder,alpha=0.3,max_anoms = 0.05) %>%
+  anomalize::time_recompose() %>%
+  anomalize::plot_anomalies(time_recomposed = TRUE, ncol = 3, alpha_dots = 0.5)
+```
+
+
+MSACSR data can be cleaned using tsclean function.
+
+```{r}
+msacsr_train <- tsclean(msacsr_tr)
+class(msacsr_train)
+```
+Cleaned data can be plotted to investigate changes.
+```{r}
+autoplot(msacsr_train, main = "Cleaned Monthly Supply of New Houses in the United States",ylab = "Months' Supply")
+
+```
+
+
+
+BoxCox plot should be checked to see if there is any need for transformation.
+
+```{r}
+BoxCox.ar(msacsr_train,method = c("yule-walker"))
+```
+
+Since y axis has values with big difference, a transformation should be applied. Lambda function of BoxCox helps finding the suitable lambda.
+
+```{r}
+lambda <- BoxCox.lambda(msacsr_train)
+lambda
+```
+```{r}
+msacsr_t <- BoxCox(msacsr_train,lambda)
+#check stationarity of transformed series
+autoplot(msacsr_t, main = "Tranformed Monthly Supply of New Houses in the United States",ylab = "Months' Supply Transformed")
+```
+
+Data is cleaned and tranformed. Hence, ACF and PACF plots can be interpreted.
+
+```{r}
+p1 <- ggAcf(msacsr_t, main="ACF of Monthly Supply of New Houses in the US")
+p2 <- ggPacf(msacsr_t, main="PACF of Monthly Supply of New Houses in the US")
+grid.arrange(p1,p2,nrow=1)
+```
+
+Since ACF plot has slow linear decay there is a non-stationarity problem. For inspecting stationarity and seasonality following tests can be applied.
+
+```{r}
+kpss.test(msacsr_t, null=c("Level"))
+```
+
+Since p-value is 0.032 which is smaller than 0.05, we reject H0. Thus, the series is not stationary according to KPSS test.
+
+```{r}
+kpss.test(msacsr_t, null=c("Trend"))
+```
+
+KPSS test for trend has a p-value of 0.01, we reject H0. Therefore, series has stochastic trend. Differencing can be applied to solve this issue.
+
+```{r}
+#Find mean to choose between c or nc
+mean(msacsr_train)
+```
+
+Since mean is not zero, use the ADF test with c
+
+```{r}
+adfTest(msacsr_t, lags=2, type="c")
+```
+
+P-value is smaller than 0.05, reject H0. We do not have any unit roots, series is stationary according to ADF. 
+
+Use hegy test to check if there is unit root problem.
+
+```{r}
+test_hegy <- hegy.test(msacsr_t, deterministic = c(1,0,0), lag.method = "AIC")
+summary(test_hegy)
+```
+
+According to hegy test there is no regular nor seasonal unit roots.
+
+To determine if we have a stochastic or a deterministic trend we may apply Canova-Hansen Test.
+
+H0: The series is deterministic and stationary.
+
+H1: The series have stochastic seasonality.
+
+```{r}
+ch.test(msacsr_t,type = "dummy",sid=c(1:12))
+```
+
+Since p-value is greater than 0.05, we fail to reject H0. The series has deterministic and stationary seasonality.
+
+Difference can be taken since series has stochastic trend according to KPSS test. HEGY test shows no unit roots but these tests might be misleading.
+
+```{r}
+ndiffs(msacsr_t)
+```
+
+According to ndiffs, 1 regular difference can be taken.
+
+```{r}
+dif_msacsr <- diff(msacsr_t)
+autoplot(dif_msacsr, main = "Differenced Monthly Supply of New Houses in the United States",ylab = "Months' Supply Diff")
+```
+
+After one regular differencing the time series plot looks stationary. KPSS test can be checked again.
+
+```{r}
+kpss.test(dif_msacsr, null=c("Trend"))
+```
+
+After differencing p-value is 0.1 so we fail to reject H0. Non-stationarity problem is solved.
+
+```{r}
+adfTest(dif_msacsr, lags=2, type="nc")
+```
+
+P-value is smaller than 0.05, reject H0. We do not have any unit roots, series is stationary according to ADF. 
+
+```{r}
+test_hegy <- HEGY.test(dif_msacsr, itsd=c(0,0,0),regvar=0, selectlags=list(mode="aic", Pmax=12))
+test_hegy$stats
+```
+
+According to HEGY test there is no regular nor seasonal unit roots.
+
+```{r}
+ch.test(dif_msacsr,type = "dummy",sid=c(1:12))
+```
+
+Since p-value is greater than 0.05, we fail to reject H0. The series has deterministic and stationary seasonality.
+
+ACF and PACF plots can be examined as series is stationary now.
+
+```{r}
+p1 <- ggAcf(dif_msacsr, lag.max=60, main="ACF of Monthly Supply of New Houses in the US")
+p2 <- ggPacf(dif_msacsr, lag.max=60, main="PACF of Monthly Supply of New Houses in the US")
+grid.arrange(p1,p2,nrow=1)
+
+```
+
+According to ACF plot, there is a significant spike at lag 1, but it can also be taken as exponential decay. ACF has seasonal spikes at 12th and 24th lags. On PACF plot there is a significant spike at lag 1, and seasonal spikes at lags 12 and 24 again.
+
+***Suggested models:*** 
+
+$SARIMA(1,1,0)(2,0,2)_{12}$
+
+$SARIMA(0,1,1)(2,0,2)_{12}$
+
+$SARIMA(1,1,0)(1,0,2)_{12}$
+
+$SARIMA(0,1,1)(1,0,2)_{12}$
+
+$SARIMA(1,1,0)(2,0,1)_{12}$
+
+$SARIMA(0,1,1)(1,0,1)_{12}$
+
+$SARIMA(1,1,0)(2,0,0)_{12}$
+
+$SARIMA(0,1,1)(0,0,2)_{12}$
+
+$SARIMA(0,1,1)(2,0,1)_{12}$
+
+Now, we can check the significance of these models by the following code.
+
+$SARIMA(1,1,0)(2,0,2)_{12}$
+
+```{r}
+fit_sarima1 = Arima(msacsr_t, order=c(1,1,0), seasonal=list(order=c(2,0,2), period=12))
+fit_sarima1
+```
+
+Now, check the significance of parameters by dividing each value to its s.e.
+
+AR(1) parameter is significant since absolute value of -0.2190/0.0369 is greater than 2.
+
+SAR(2) parameter is not significant since absolute value of -0.0753/0.2178 is less than 2.
+
+SMA(2) parameter is not significant since absolute value of -0.0441/0.2668 is less than 2.
+
+
+$SARIMA(0,1,1)(2,0,2)_{12}$
+
+```{r}
+fit_sarima2 = Arima(msacsr_t, order=c(0,1,1), seasonal=list(order=c(2,0,2), period=12))
+fit_sarima2
+```
+
+SAR(2) and SMA(2) are not significant.
+
+$SARIMA(1,1,0)(1,0,2)_{12}$
+
+```{r}
+fit_sarima3 = Arima(msacsr_t, order=c(1,1,0), seasonal=list(order=c(1,0,2), period=12))
+fit_sarima3
+```
+
+Since all the parameters are significant, model 3 is significant.
+
+$SARIMA(0,1,1)(1,0,2)_{12}$
+
+```{r}
+fit_sarima4 = Arima(msacsr_t, order=c(0,1,1), seasonal=list(order=c(1,0,2), period=12))
+fit_sarima4
+```
+
+Since all the parameters are significant, model 4 is significant.
+
+$SARIMA(1,1,0)(2,0,1)_{12}$
+
+```{r}
+fit_sarima5 = Arima(msacsr_t, order=c(1,1,0), seasonal=list(order=c(2,0,1), period=12))
+fit_sarima5
+```
+
+Since all the parameters are significant, model 5 is significant.
+
+$SARIMA(0,1,1)(1,0,1)_{12}$
+
+```{r}
+fit_sarima6 = Arima(msacsr_t, order=c(0,1,1), seasonal=list(order=c(1,0,1), period=12))
+fit_sarima6
+```
+
+Since all the parameters are significant, model 6 is significant.
+
+$SARIMA(1,1,0)(2,0,0)_{12}$
+
+```{r}
+fit_sarima7 = Arima(msacsr_t, order=c(1,1,0), seasonal=list(order=c(2,0,0), period=12))
+fit_sarima7
+```
+
+Since all the parameters are significant, model 7 is significant.
+
+$SARIMA(0,1,1)(0,0,2)_{12}$
+
+```{r}
+fit_sarima8 = Arima(msacsr_t, order=c(0,1,1), seasonal=list(order=c(0,0,2), period=12))
+fit_sarima8
+```
+
+Since all the parameters are significant, model 8 is significant.
+
+$SARIMA(0,1,1)(2,0,1)_{12}$
+
+```{r}
+fit_sarima9 = Arima(msacsr_t, order=c(0,1,1), seasonal=list(order=c(2,0,1), period=12))
+fit_sarima9
+```
+
+Since all the parameters are significant, model 9 is significant.
+
+Model 9 has the minimum AIC value. We can proceed with $SARIMA(0,1,1)(2,0,1)_{12}$
+
+Here is the auto.arima results for good measure:
+
+```{r}
+auto.arima(msacsr_t)
+```
+
+All parameters are significant.
+
+**Diagnostic Checks:**
+Now we can proceed with diagnostic checking.
+
+We need to obtain the residuals.
+
+```{r}
+r=resid(fit_sarima9)
+autoplot(r)+geom_line(y=0)+theme_minimal()+ggtitle("Plot of The Residuals")
+```
+
+As the residuals are scattered around zero, they have zero mean.
+
+***QQ-PLOT***
+
+```{r}
+ggplot(r, aes(sample = r)) +stat_qq()+geom_qq_line()+ggtitle("QQ Plot of the Residuals")+theme_minimal()
+```
+
+When QQ Plot is interpreted, it can be seen that the residuals have a heavy tailed distribution due to the slight S shape. Also, there can be some outliers.
+
+***HISTOGRAM***
+
+```{r}
+ggplot(r,aes(x=r))+geom_histogram(bins=20)+geom_density()+ggtitle("Histogram of Residuals")+theme_minimal()
+```
+
+There seems to be some outliers. Histogram do not look skewed. Histogram seems symmetric
+
+***BOXPLOT***
+
+```{r}
+summary(r)
+```
+```{r}
+ggplot(r,aes(y=r,x=as.factor(1)))+geom_boxplot()+ggtitle("Box Plot of Residuals")+theme_minimal()
+```
+
+Since boxplot is quite symmetric data seems normal. There might be some outliers that can interfere normality of residuals.
+
+***Formal Tests***
+
+H0:Residuals have normal distribution.
+H1:Residuals don’t have normal distribution.
+
+*Jarque Bera Test*
+
+```{r}
+jarque.bera.test(r)
+```
+
+*Shapiro-Wilk Test*
+
+```{r}
+shapiro.test(r)
+```
+
+Since p-values of the tests are less than 0.05, we need to reject H0. We cannot say that residuals are normality distributed.
+
+**Serial Autocorrelation**
+
+```{r}
+ggAcf(as.vector(r),main="ACF of the Residuals",lag = 48)+theme_minimal() 
+```
+
+Since majority of the spikes are inside the WN band we can conclude that residuals seems uncorrelated. Apply formal tests to make sure.
+
+***Formal Tests***
+
+H0: no serial correlation of any order up to p 
+H1: serial correlation up to p 
+
+*Breusch-Godfrey Test*
+
+```{r}
+m = lm(r ~ 1+zlag(r))
+bgtest(m,order=15) 
+```
+
+P-value is less than 0.05, we reject H0. We cannot claim that residuals are uncorrelated according to Breusch-Godfrey Test.
+
+*Box-Ljung Test*
+
+```{r}
+Box.test(r,lag=15,type = c("Ljung-Box")) 
+```
+
+P-value is greater than 0.05, we fail to reject H0. We can claim that residuals are uncorrelated according to Box-Ljung Test.
+
+*Box-Pierce Test (Modified Version of Box-Ljung Test)*
+
+```{r}
+Box.test(r,lag=15,type = c("Box-Pierce"))
+```
+
+P-value is greater than 0.05, we fail to reject H0. We can claim that residuals are uncorrelated according to Box-Pierce Test.
+
+Since 2 tests results in the same claim, we can accept data as uncorrelated.
+
+**Detecting Heteroscedasticity**
+
+```{r}
+rr=r^2
+g1<-ggAcf(as.vector(rr), lag.max = 48)+theme_minimal()+ggtitle("ACF of Squared Residuals")
+g2<-ggPacf(as.vector(rr), lag.max = 48)+theme_minimal()+ggtitle("PACF of Squared Residuals")  
+grid.arrange(g1,g2,ncol=2)
+```
+
+There are some big spikes exceeding the WN bands which can show heteroscedasticity. 
+
+***Formal Tests***
+
+H0:Residuals are homoscedastic.
+
+H1:Residuals are heteroscedastic.
+
+**Breusch Pagan Test**
+
+```{r}
+m = lm(r ~ msacsr_t+zlag(msacsr_t)+zlag(msacsr_t,2))
+bptest(m)
+```
+
+P-value is greater than 0.05, we fail to reject H0. We can claim that residuals are homoscedastic according to Breusch Pagan Test.
+
+**White test**
+
+```{r}
+m1 = lm(r ~ msacsr_t+zlag(msacsr_t)+zlag(msacsr_t,2)+zlag(msacsr_t)^2+zlag(msacsr_t,2)^2+zlag(msacsr_t)*zlag(msacsr_t,2))
+bptest(m1)
+```
+
+P-value is greater than 0.05, we fail to reject H0. We can claim that residuals are homoscedastic according to White Test.
+
+**Engle’s ARCH Test**
+
+H0:Residuals have no ARCH effects.
+
+H1:ARCH(lag) effects are present.
+
+```{r}
+ArchTest(rr)
+```
+
+P-value is greater than 0.05, we fail to reject H0. We can claim that residuals have no ARCH effects. Since there does not seem to be  heteroscedasticity, there is no need to apply ARCH and GARCH methods.
+
+**Forecasting**
+
+Forecasting can be applied to the fitted model.
+
+```{r}
+f<-forecast(fit_sarima9,h=12)
+f
+```
+
+```{r}
+autoplot(f)+theme_minimal()+ggtitle("Forecast of SARIMA")
+```
+
+Prediction interval seems wide.
+
+Accuracy can be checked to observe the prediction of the model.
+
+```{r}
+f_t<-InvBoxCox(f$mean,lambda)
+accuracy(f_t,msacsr_test)
+```
+
+```{r}
+autoplot(f_t,main=c("Time Series Plot of Actual Values and SARIMA Forecast"), series="forecast" ) + autolayer(msacsr_test,series = "actual")
+```
+
+Even though forecast value does not seem good it still follows breaking points nicely.
+
+**Simple Exponential Smoothing**
+
+Cannot be used since data has seasonality.
+Use ets function for finding the best exponential smoothing.
+
+```{r}
+msacsr_ets <-ets(msacsr_tr,model="ZZZ")
+msacsr_ets
+```
+
+Ets gives us a model without capturing the seasonality. We should not proceed with ETS in this case but lets calculate accuracy and forecast for the project.
+
+```{r}
+autoplot(msacsr_ets)+theme_minimal()
+```
+
+```{r}
+ses_msacsr_f<-forecast(msacsr_ets,h=12)
+ses_msacsr_f
+```
+```{r}
+autoplot(ses_msacsr_f)+theme_minimal()
+```
+
+```{r}
+accuracy(ses_msacsr_f,msacsr_test)
+```
+
+Check normality of residuals of ets:
+
+```{r}
+r1=resid(ses_msacsr_f)
+```
+
+
+```{r}
+jarque.bera.test(r1)
+```
+
+```{r}
+shapiro.test(r1)
+```
+
+Residuals are not normal.
+
+**Double Exponential Smoothing (Holt’s Exponential Smoothing)**
+
+Cannot be used since the data has seasonality.
+
+**Holt Winter’s Exponential Smoothing**
+
+Holt Winter’s exponential smoothing can be used since our data have trend and seasonality. 
+
+```{r}
+msacsr_hw<-hw(msacsr_tr, h=13, seasonal="additive")
+msacsr_hw$model
+```
+
+```{r}
+autoplot(msacsr_hw)
+```
+
+Forecast of Holt-Winters' additive method seems quite better so far.
+
+Check normality of residuals of Holt-Winters' additive method:
+
+```{r}
+r2=resid(msacsr_hw)
+```
+
+```{r}
+jarque.bera.test(r2)
+```
+
+```{r}
+shapiro.test(r2)
+```
+
+Residuals are not normal.
+
+Even though seasonality seems additive it is still hard to decide. Try multiplicative model as well.
+
+```{r}
+msacsr_hw2<-hw(msacsr_tr, h=13, seasonal="multiplicative")
+msacsr_hw2$model
+```
+```{r}
+autoplot(msacsr_hw2)
+```
+
+Check normality of residuals of Holt-Winters' multiplicative method:
+
+```{r}
+r3=resid(msacsr_hw2)
+```
+
+```{r}
+jarque.bera.test(r3)
+```
+
+```{r}
+shapiro.test(r3)
+```
+
+Residuals are not normal.
+
+These methods can be compared with accuracy.
+
+```{r}
+accuracy(msacsr_hw,msacsr_test)
+```
+
+```{r}
+accuracy(msacsr_hw2,msacsr_test)
+```
+
+Second fit seems better as it has smaller RMSE and MAPE values.
+
+**Prophet**
+
+Prophet can be used since there is seasonality in the data.
+Change the class of the data back to df.
+
+```{r}
+ds<-c(seq(as.Date("1963/01/01"),as.Date("2023/10/01"),by="month"))
+head(ds)
+```
+
+```{r}
+df<-data.frame(ds,y=as.numeric(msacsr_tr))
+head(df)
+```
+
+Apply prophet to the data to find its model.
+
+```{r}
+msacsr_prophet <- prophet(df)
+future_df<-make_future_dataframe(msacsr_prophet,periods = 12)
+tail(future_df)
+```
+
+Following codes should be used to draw the forecast of the prophet model.
+
+```{r}
+forecast <- predict(msacsr_prophet, future_df)
+tail(forecast[c('ds', 'yhat', 'yhat_lower', 'yhat_upper')],12)
+```
+
+```{r}
+plot(msacsr_prophet, forecast)+theme_minimal()
+```
+
+Model is a bad fit from the plot. Predicted values are shown with blue line and light blue area shows upper and lower yhat values, none looks closer to actual values shown with black dots.
+
+```{r}
+prophet_plot_components(msacsr_prophet, forecast)
+```
+
+Trend and seasonality of prophet model can be seen above.
+
+```{r}
+accuracy(tail(forecast$yhat,12),msacsr_test)
+```
+
+Accuracy of Holt Winters' Exponential Smoothing is better than prophet.
+
+**Hyper Parameter Tuning**
+
+```{r}
+changepoint_prior <- c(0.1, 0.5, 0.9)
+seasonality_prior <- c(0.1, 0.3, 0.5)
+changepoint_range <- c(0.6, 0.8, 0.9)
+
+results <- data.frame(
+  changepoint_prior = numeric(),
+  seasonality_prior = numeric(),
+  changepoint_range = numeric(),
+  RMSE = numeric()
+)
+
+for (cp in changepoint_prior) {
+  for (sp in seasonality_prior) {
+    for (cr in changepoint_range) {
+      m <- prophet(
+        changepoint.prior.scale = cp,
+        seasonality.prior.scale = sp,
+        changepoint.range = cr
+      )
+      m <- fit.prophet(m, df) 
+      
+
+      future <- make_future_dataframe(m, periods = 12, freq = "month")
+      forecast <- predict(m, future)
+      
+      predicted <- tail(forecast$yhat, 12)
+      acc <- accuracy(predicted, msacsr_test)  
+      rmse <- acc["Test set", "RMSE"]  # Extract RMSE from accuracy
+      
+      results <- rbind(results, data.frame(
+        changepoint_prior = cp, 
+        seasonality_prior = sp, 
+        changepoint_range = cr, 
+        RMSE = rmse
+      ))
+    }
+  }
+}
+
+#best parameters
+best_params <- results[which.min(results$RMSE), ]
+best_params
+```
+
+When changepoint_prior=0.9, seasonality_prior=0.1, changepoint_range=0.9 we obtain the min RMSE.
+
+Let us create a new prophet.
+
+```{r}
+msacsr_prophet_new <- prophet(df, changepoint.range=0.9,changepoint.prior.scale=0.9,seasonality.prior.scale=0.1)
+future_df_new<-make_future_dataframe(msacsr_prophet,periods = 12)
+forecast_new <- predict(msacsr_prophet_new, future_df_new)
+
+```
+
+```{r}
+plot(msacsr_prophet_new, forecast)+theme_minimal()
+```
+Much better fit compared to previous one.
+
+Check normality of residuals of Prophet method:
+
+```{r}
+r4 <- df$y - forecast_new$yhat[1:nrow(df)]
+```
+
+```{r}
+jarque.bera.test(r4)
+```
+
+```{r}
+shapiro.test(r4)
+```
+
+Residuals are not normal.
+
+```{r}
+accuracy(tail(forecast_new$yhat,12),msacsr_test)
+```
+
+**TBATS**
+
+For TBATS model we do not use the transformed model. TBATS can be applied since the data has seasonality.  TBATS model is applied with following code:
+
+```{r}
+msacsr_tbats<-tbats(msacsr_train)
+msacsr_tbats
+```
+
+Lambda value is 0.007, data is transformed to y^0.007
+
+```{r}
+autoplot(msacsr_train,main="TS plot of MSACSR Train with TBATS Fitted") +autolayer(fitted(msacsr_tbats), series="Fitted") +theme_minimal()
+
+```
+
+TBATS is doing a good job at matching the original plot. Its forecast can be found as well.
+
+```{r}
+msacsr_tbats_forecast<-forecast(msacsr_tbats,h=12)
+msacsr_tbats_forecast
+```
+
+```{r}
+autoplot(msacsr_tbats_forecast)+theme_minimal()
+```
+
+Prediciton interval seems quite wide. 
+
+```{r}
+autoplot(msacsr_tbats_forecast)+autolayer(msacsr_test,series="actual",color="red")+theme_minimal()
+```
+
+TBATS forecast seems off from the test set. 
+
+Check normality of residuals of TBATS method:
+
+```{r}
+r5=resid(msacsr_tbats_forecast)
+```
+
+```{r}
+jarque.bera.test(r5)
+```
+
+```{r}
+shapiro.test(r5)
+```
+
+Residuals are not normal.
+
+Accuracy can be computed.
+
+```{r}
+accuracy(msacsr_tbats_forecast,msacsr_test)
+```
+
+TBATS model has the worst MAPE value thus far. Accuracy of Holt Winters' Exponential Smoothing is still better.
+
+**Neural Network**
+
+Construct NN model,
+
+```{r}
+msacsr_nnmodel<-nnetar(msacsr_tr)
+msacsr_nnmodel
+```
+
+The obtained model is NNAR(25,1,13)[12], there are 13 neurons in the hidden layer.
+
+```{r}
+autoplot(msacsr_tr)+autolayer(fitted(msacsr_nnmodel))+theme_minimal()+ggtitle("Fitted Values of NN Model")
+```
+
+Lines seems to fit.
+
+Obtain forecast now.
+
+```{r}
+msacsr_nnforecast<-forecast(msacsr_nnmodel,h=12,PI=TRUE)
+msacsr_nnforecast
+```
+
+```{r}
+autoplot(msacsr_nnforecast)+theme_minimal()
+```
+
+```{r}
+autoplot(msacsr_nnforecast)+autolayer(msacsr_test,series="actual",color="red")+theme_minimal()
+```
+
+Prediction interval seems narrower, however its forecast is visibly bad. Accuracy function will make it easier to compare between forecasts as its predicted line seems very off.
+
+```{r}
+accuracy(msacsr_nnforecast,msacsr_test)
+```
+
+MAPE seems too big but an overall comparison with other forecasts will be more logical.
+
+*Changing the parameters of NNTAR*
+
+Make the number of neurons in the hidden layers 15.
+
+```{r}
+msacsr_nnmodel_new<-nnetar(msacsr_tr, size=15)
+msacsr_nnmodel_new
+```
+
+```{r}
+autoplot(msacsr_tr)+autolayer(fitted(msacsr_nnmodel_new))+theme_minimal()+ggtitle("Fitted Values of NN Model")
+```
+
+
+
+```{r}
+msacsr_nnforecast_new<-forecast(msacsr_nnmodel_new,h=12,PI=TRUE)
+msacsr_nnforecast_new
+```
+
+```{r}
+autoplot(msacsr_nnforecast_new)+autolayer(msacsr_test,series="actual",color="red")+theme_minimal()
+```
+
+```{r}
+accuracy(msacsr_nnforecast_new,msacsr_test)
+```
+Better result than before. This can be used as nnetar model.
+
+**CHECKING ACCURACIES**
+
+SARIMA:
+```{r}
+f_t<-InvBoxCox(f$mean,lambda)
+accuracy(f_t,msacsr_test)
+```
+```{r}
+fit_t <- InvBoxCox(fitted(f),lambda)
+train_acc <- accuracy(fit_t, msacsr_train)
+print(train_acc)
+```
+
+
+ETS:
+
+```{r}
+accuracy(ses_msacsr_f,msacsr_test)
+```
+
+Holt Winter’s Exponential Smoothing:
+*Additive:*
+```{r}
+accuracy(msacsr_hw,msacsr_test)
+```
+
+*Multiplicative:*
+```{r}
+accuracy(msacsr_hw2,msacsr_test)
+```
+
+Prophet:
+```{r}
+accuracy(tail(forecast$yhat,12),msacsr_test)
+```
+```{r}
+accuracy(forecast$yhat, msacsr_train)
+```
+
+Prophet with Hyperparameter tuning:
+
+```{r}
+accuracy(tail(forecast_new$yhat,12),msacsr_test)
+```
+```{r}
+accuracy(forecast_new$yhat, msacsr_train)
+```
+
+
+TBATS:
+
+```{r}
+accuracy(msacsr_tbats_forecast,msacsr_test)
+```
+
+NN:
+
+```{r}
+accuracy(msacsr_nnforecast_new,msacsr_test)
+```
+
+ETS and     Holt Winters' Multiplicative model has the minimum RMSE and MAPE values, it has the best forecasting performance compared to other forecasts.
+
+The plots of TBATS and NN seemed like a good fit for the train set but its performance with forecasting shows that there can be an overfitting problem with these approaches. As NN has a really bad forecast an overfitting is highly possible.
+
+**PLOT**
+
+**SARIMA**
+Take inverse transform for plot: 
+```{r}
+f1<-forecast(fit_sarima9,h=12)
+f1$mean <- InvBoxCox(f$mean, lambda)
+f1$lower <- InvBoxCox(f$lower, lambda)
+f1$upper <- InvBoxCox(f$upper, lambda)
+fitted_sarima <- InvBoxCox(fitted(fit_sarima9), lambda)
+```
+
+
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(f1, series = "SARIMA Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted_sarima, series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for SARIMA",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "SARIMA Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal() +   theme(legend.position = "bottom")  
+```
+**ETS**
+
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(ses_msacsr_f, series = "ETS Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted(ses_msacsr_f), series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for ETS",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "ETS Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal()+   theme(legend.position = "bottom")
+```
+
+
+**Holt Winters' Exponential Smoothing**
+
+Holt Winters' Additive Model
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(msacsr_hw, series = "HW Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted(msacsr_hw), series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for Holt Winters' Additive ES",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "HW Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal()+   theme(legend.position = "bottom")
+```
+
+Holt Winter’s Multiplicative Model
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(msacsr_hw2, series = "HW Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted(msacsr_hw2), series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for Holt Winters' Multiplicative ES",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "HW Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal()+   theme(legend.position = "bottom")
+```
+
+**Prophet**
+
+```{r}
+plot(msacsr_prophet, forecast)+  theme_minimal()
+```
+**Prophet with Hyperparameter Tuning**
+
+```{r}
+plot(msacsr_prophet_new, forecast)+theme_minimal()
+```
+
+**TBATS**
+
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(msacsr_tbats_forecast, series = "TBATS Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted(msacsr_tbats), series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for TBATS",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "TBATS Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal()+   theme(legend.position = "bottom")
+```
+
+**NNETAR**
+
+```{r}
+autoplot(msacsr_train, series = "Training Set") +
+  autolayer(msacsr_nnforecast_new, series = "NN Forecast", PI = TRUE) +  
+  autolayer(msacsr_test, series = "Test Set") +     
+  autolayer(fitted(msacsr_nnmodel_new), series = "Fitted Values") +
+  labs(
+    title = "Time Series Forecast with Training and Test Set for NNETAR",
+    x = "Year",
+    y = "Months' Supply",
+    color = "Legend"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Training Set" = "black",
+      "NN Forecast" = "navy",
+      "Test Set" = "orange",
+      "Fitted Values" = "purple"
+    )
+  ) +
+  geom_vline(xintercept = 2023.75, linetype = "dotted", color = "red", linewidth = 0.7) +  
+  theme_minimal()+   theme(legend.position = "bottom")
+```
+
+
+
+
+
+
+```{r}
+autoplot(msacsr_train)+autolayer(f_t,PI=F,series = "SARIMA")+autolayer(msacsr_hw2,PI=F,series="Holt's Winter")+autolayer(msacsr_tbats_forecast$mean,PI=F,series="TBATS")+autolayer(msacsr_nnforecast$mean,PI=F,series="NN")+autolayer(msacsr_test,series="Actual",color="black")+theme_minimal()+ggtitle("Forecasts from Holt's and SES Methods")
+
+```
+```{r}
+autoplot(msacsr_test, y = "Months' Supply")+autolayer(f_t,PI=F,series = "SARIMA")+autolayer(msacsr_hw,PI=F,series="Holt's Winter Ad.")+autolayer(msacsr_hw2,PI=F,series="Holt's Winter M.")+autolayer(msacsr_tbats_forecast$mean,PI=F,series="TBATS")+autolayer(msacsr_nnforecast_new$mean,PI=F,series="NN")+autolayer(ses_msacsr_f$mean,PI=F,series="ETS")+theme_minimal()+ggtitle("Forecasts from Conducted Methods")+   theme(legend.position = "bottom")
+
+```
+
+
+
+
